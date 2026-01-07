@@ -84,7 +84,7 @@ pkg-config --libs ctranslate2
 ### Building from Source
 
 ```bash
-git clone https://github.com/primo/go-whisper-ct2.git
+git clone https://github.com/xPrimeTime/go-whisper-ct2.git
 cd go-whisper-ct2
 make
 ```
@@ -107,7 +107,7 @@ make install
 ### As a Go Library
 
 ```bash
-go get github.com/primo/go-whisper-ct2/pkg/whisper
+go get github.com/xPrimeTime/go-whisper-ct2/pkg/whisper
 ```
 
 **Note:** The C++ library must be built and installed for the Go package to work.
@@ -243,7 +243,7 @@ import (
     "fmt"
     "log"
 
-    "github.com/primo/go-whisper-ct2/pkg/whisper"
+    "github.com/xPrimeTime/go-whisper-ct2/pkg/whisper"
 )
 
 func main() {

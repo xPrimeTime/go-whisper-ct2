@@ -103,7 +103,7 @@ lint:
 # Generate documentation
 docs:
 	godoc -http=:6060 &
-	@echo "Documentation available at http://localhost:6060/pkg/github.com/primo/go-whisper-ct2/"
+	@echo "Documentation available at http://localhost:6060/pkg/github.com/xPrimeTime/go-whisper-ct2/"
 
 # Help
 help:
