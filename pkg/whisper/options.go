@@ -73,6 +73,32 @@ type TranscribeOptions struct {
 	// Note: Not yet implemented.
 	// Default: false
 	WordTimestamps bool
+
+	// NoSpeechThreshold skips chunks with no_speech_prob above this value.
+	// This matches faster-whisper's VAD behavior for silent chunk filtering.
+	// Set to 0.0 to disable (process all chunks).
+	// Default: 0.6
+	NoSpeechThreshold float32
+
+	// ConditionOnPreviousText uses previous transcribed text as context.
+	// This improves accuracy and consistency across segments.
+	// Default: true
+	ConditionOnPreviousText bool
+
+	// CompressionRatioThreshold skips chunks with compression_ratio above this.
+	// Detects repetitive/hallucinated text. Set to 0.0 to disable.
+	// Default: 2.4
+	CompressionRatioThreshold float32
+
+	// LogprobThreshold skips chunks with average log probability below this.
+	// Detects low-confidence transcriptions. Set to 0.0 to disable.
+	// Default: -1.0
+	LogprobThreshold float32
+
+	// TemperatureFallback is a list of temperatures to try on quality failure.
+	// If nil, uses default: [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+	// Set to empty slice to disable fallback.
+	TemperatureFallback []float32
 }
 
 // DefaultTranscribeOptions returns sensible defaults for transcription.
@@ -89,11 +115,16 @@ func DefaultTranscribeOptions() TranscribeOptions {
 		MaxInitialTimestampIndex: 50,
 		SuppressBlank:            true,
 		SuppressTokens:           nil,
-		Language:                 "auto",
-		Task:                     "transcribe",
-		ReturnScores:             false,
-		ReturnNoSpeechProb:       false,
-		WordTimestamps:           false,
+		Language:                  "auto",
+		Task:                      "transcribe",
+		ReturnScores:              false,
+		ReturnNoSpeechProb:        false,
+		WordTimestamps:            false,
+		NoSpeechThreshold:         0.6,   // Match faster-whisper default
+		ConditionOnPreviousText:   true,
+		CompressionRatioThreshold: 2.4,   // Match faster-whisper default
+		LogprobThreshold:          -1.0,  // Match faster-whisper default
+		TemperatureFallback:       nil,   // Use default [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
 	}
 }
 
@@ -218,5 +249,58 @@ func WithNoSpeechProb(enabled bool) Option {
 func WithWordTimestamps(enabled bool) Option {
 	return func(o *TranscribeOptions) {
 		o.WordTimestamps = enabled
+	}
+}
+
+// WithNoSpeechThreshold sets the threshold for skipping silent chunks.
+//
+// Chunks with no_speech_prob above this value are skipped, matching
+// faster-whisper's VAD behavior. Set to 0.0 to process all chunks.
+// Default: 0.6
+func WithNoSpeechThreshold(threshold float32) Option {
+	return func(o *TranscribeOptions) {
+		o.NoSpeechThreshold = threshold
+	}
+}
+
+// WithConditionOnPreviousText controls context conditioning.
+//
+// When enabled, previous transcribed text is used as context for
+// better accuracy and consistency. Disable for independent segments.
+// Default: true
+func WithConditionOnPreviousText(enabled bool) Option {
+	return func(o *TranscribeOptions) {
+		o.ConditionOnPreviousText = enabled
+	}
+}
+
+// WithCompressionRatioThreshold sets the threshold for skipping repetitive text.
+//
+// Chunks with compression ratio above this value are skipped or retried.
+// Set to 0.0 to disable. Default: 2.4
+func WithCompressionRatioThreshold(threshold float32) Option {
+	return func(o *TranscribeOptions) {
+		o.CompressionRatioThreshold = threshold
+	}
+}
+
+// WithLogprobThreshold sets the threshold for skipping low-confidence text.
+//
+// Chunks with average log probability below this value are skipped or retried.
+// Set to 0.0 to disable. Default: -1.0
+func WithLogprobThreshold(threshold float32) Option {
+	return func(o *TranscribeOptions) {
+		o.LogprobThreshold = threshold
+	}
+}
+
+// WithTemperatureFallback sets the temperature fallback sequence.
+//
+// When a chunk fails quality checks, it's retried with each temperature.
+// Default: [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+// Set to empty slice to disable fallback (use temperature from sampling options).
+func WithTemperatureFallback(temps []float32) Option {
+	return func(o *TranscribeOptions) {
+		o.TemperatureFallback = temps
 	}
 }

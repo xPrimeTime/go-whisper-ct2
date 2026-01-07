@@ -181,6 +181,15 @@ func toCOptions(opts *TranscribeOptions) C.whisper_transcribe_options_t {
 	cOpts.return_scores = C.bool(opts.ReturnScores)
 	cOpts.return_no_speech_prob = C.bool(opts.ReturnNoSpeechProb)
 	cOpts.word_timestamps = C.bool(opts.WordTimestamps)
+	cOpts.no_speech_threshold = C.float(opts.NoSpeechThreshold)
+	cOpts.condition_on_previous_text = C.bool(opts.ConditionOnPreviousText)
+	cOpts.compression_ratio_threshold = C.float(opts.CompressionRatioThreshold)
+	cOpts.logprob_threshold = C.float(opts.LogprobThreshold)
+
+	if len(opts.TemperatureFallback) > 0 {
+		cOpts.temperature_fallback = (*C.float)(unsafe.Pointer(&opts.TemperatureFallback[0]))
+		cOpts.temperature_fallback_count = C.size_t(len(opts.TemperatureFallback))
+	}
 
 	if opts.Language != "" {
 		cOpts.language = C.CString(opts.Language)

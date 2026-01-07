@@ -118,6 +118,16 @@ typedef struct {
     bool return_scores;             /* Return confidence scores */
     bool return_no_speech_prob;     /* Return no-speech probability */
     bool word_timestamps;           /* Compute word-level timestamps (not yet implemented) */
+
+    /* Performance options */
+    float no_speech_threshold;      /* Skip chunks with no_speech_prob > this (default: 0.6, 0.0 = disabled) */
+    bool condition_on_previous_text; /* Use previous text as context (default: true) */
+    float compression_ratio_threshold; /* Skip chunks with compression_ratio > this (default: 2.4, 0.0 = disabled) */
+    float logprob_threshold;        /* Skip chunks with avg logprob < this (default: -1.0, 0.0 = disabled) */
+
+    /* Temperature fallback (for retrying on failure) */
+    const float* temperature_fallback; /* Array of temperatures to try (default: [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]) */
+    size_t temperature_fallback_count;  /* Number of temperatures (default: 6) */
 } whisper_transcribe_options_t;
 
 /* Initialize options with defaults */

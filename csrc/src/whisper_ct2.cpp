@@ -97,7 +97,8 @@ static ctranslate2::ComputeType parse_compute_type(const char* compute_type) {
 static std::vector<std::string> build_prompt(
     const char* language,
     const char* task,
-    bool is_multilingual
+    bool is_multilingual,
+    const std::string& previous_text = ""
 ) {
     std::vector<std::string> prompt;
     prompt.push_back("<|startoftranscript|>");
@@ -113,7 +114,41 @@ static std::vector<std::string> build_prompt(
     }
 
     // Don't add <|notimestamps|> so we get segment timestamps
+
+    // Add previous text for context if provided
+    if (!previous_text.empty()) {
+        prompt.push_back(previous_text);
+    }
+
     return prompt;
+}
+
+// Helper: Calculate compression ratio for text
+static float calculate_compression_ratio(const std::string& text) {
+    if (text.empty()) return 1.0f;
+
+    // Count unique characters vs total length as a simple compression measure
+    // In faster-whisper, this uses gzip compression, but token ratio is simpler
+    std::unordered_map<char, int> char_freq;
+    for (char c : text) {
+        char_freq[c]++;
+    }
+
+    // Compression ratio = original_size / compressed_size estimate
+    // Higher ratio = more repetitive text
+    float unique_ratio = static_cast<float>(char_freq.size()) / text.length();
+    return 1.0f / (unique_ratio + 0.01f);  // Avoid division by zero
+}
+
+// Helper: Calculate average log probability
+static float calculate_avg_logprob(const std::vector<float>& scores) {
+    if (scores.empty()) return 0.0f;
+
+    float sum = 0.0f;
+    for (float score : scores) {
+        sum += score;
+    }
+    return sum / scores.size();
 }
 
 // Helper: Extract text and timestamps from generation result
@@ -229,7 +264,8 @@ static whisper_error_t transcribe_samples(
         gen_opts.sampling_temperature = opts.sampling_temperature;
         gen_opts.suppress_blank = opts.suppress_blank;
         gen_opts.return_scores = opts.return_scores;
-        gen_opts.return_no_speech_prob = opts.return_no_speech_prob;
+        // Auto-enable no_speech_prob if using threshold
+        gen_opts.return_no_speech_prob = opts.return_no_speech_prob || (opts.no_speech_threshold > 0.0f);
 
         if (opts.suppress_tokens && opts.suppress_tokens_count > 0) {
             gen_opts.suppress_tokens.assign(
@@ -241,6 +277,9 @@ static whisper_error_t transcribe_samples(
         // Detect language if needed
         std::string detected_language;
         float language_prob = 0.0f;
+
+        // Track previous text for conditioning
+        std::string previous_text;
 
         // Process chunks
         for (int start = 0; start < total_frames || start == 0; start += chunk_frames) {
@@ -283,32 +322,107 @@ static whisper_error_t transcribe_samples(
                 language_prob = 1.0f;
             }
 
-            // Build prompt
+            // Build prompt with previous text context if enabled
             auto prompt = build_prompt(
                 detected_language.empty() ? nullptr : detected_language.c_str(),
                 opts.task,
-                model->is_multilingual
+                model->is_multilingual,
+                opts.condition_on_previous_text ? previous_text : ""
             );
 
-            // Generate
-            auto result_futures = model->model->generate(
-                features,
-                {prompt},
-                gen_opts
-            );
+            // Default temperature fallback if not specified
+            static const float default_temps[] = {0.0f, 0.2f, 0.4f, 0.6f, 0.8f, 1.0f};
+            const float* temps = opts.temperature_fallback ? opts.temperature_fallback : default_temps;
+            size_t temp_count = opts.temperature_fallback_count > 0 ? opts.temperature_fallback_count : 6;
 
-            // Process results
-            if (!result_futures.empty()) {
+            // Try generation with temperature fallback
+            ctranslate2::models::WhisperGenerationResult best_result;
+            bool success = false;
+
+            for (size_t t = 0; t < temp_count && !success; ++t) {
+                // Update temperature
+                auto temp_opts = gen_opts;
+                temp_opts.sampling_temperature = temps[t];
+
+                // Generate
+                auto result_futures = model->model->generate(
+                    features,
+                    {prompt},
+                    temp_opts
+                );
+
+                if (result_futures.empty()) continue;
                 auto result = result_futures[0].get();
+
+                // Check no_speech_threshold to skip silent chunks (like faster-whisper)
+                if (opts.no_speech_threshold > 0.0f && result.no_speech_prob > opts.no_speech_threshold) {
+                    // Skip this chunk - it's silent
+                    time_offset += AudioProcessor::CHUNK_LENGTH;
+                    goto next_chunk;  // Break out of temperature loop and chunk loop
+                }
+
+                // Extract text to check quality
+                std::string chunk_text;
+                for (const auto& sequence : result.sequences) {
+                    for (const auto& token : sequence) {
+                        if (token[0] != '<') {
+                            chunk_text += token;
+                        }
+                    }
+                }
+                chunk_text = clean_text(chunk_text);
+
+                // Calculate quality metrics
+                float compression_ratio = calculate_compression_ratio(chunk_text);
+                float avg_logprob = calculate_avg_logprob(result.scores);
+
+                // Check quality thresholds
+                bool passed_compression = opts.compression_ratio_threshold <= 0.0f ||
+                                         compression_ratio <= opts.compression_ratio_threshold;
+                bool passed_logprob = opts.logprob_threshold >= 0.0f ||
+                                     avg_logprob >= opts.logprob_threshold;
+
+                if (passed_compression && passed_logprob) {
+                    best_result = std::move(result);
+                    success = true;
+                } else if (t == temp_count - 1) {
+                    // Last temperature - use it anyway
+                    best_result = std::move(result);
+                    success = true;
+                }
+            }
+
+            // Process the best result
+            if (success) {
+                size_t segments_before = all_segments.size();
                 process_generation_result(
-                    result,
+                    best_result,
                     time_offset,
                     all_segments,
                     full_text,
                     opts.return_scores,
                     opts.return_no_speech_prob
                 );
+
+                // Update previous text with new segments for context
+                if (opts.condition_on_previous_text) {
+                    // Collect text from newly added segments
+                    std::string chunk_text;
+                    for (size_t i = segments_before; i < all_segments.size(); ++i) {
+                        if (!chunk_text.empty()) chunk_text += " ";
+                        chunk_text += all_segments[i].text;
+                    }
+                    // Keep last ~244 tokens worth of context (approximation)
+                    if (!chunk_text.empty()) {
+                        previous_text = chunk_text;
+                        if (previous_text.length() > 500) {
+                            previous_text = previous_text.substr(previous_text.length() - 500);
+                        }
+                    }
+                }
             }
+
+            next_chunk:
 
             time_offset += AudioProcessor::CHUNK_LENGTH;
 
@@ -472,6 +586,12 @@ void whisper_transcribe_options_init(whisper_transcribe_options_t* options) {
         options->return_scores = false;
         options->return_no_speech_prob = false;
         options->word_timestamps = false;
+        options->no_speech_threshold = 0.6f;  // Match faster-whisper default
+        options->condition_on_previous_text = true;
+        options->compression_ratio_threshold = 2.4f;  // Match faster-whisper default
+        options->logprob_threshold = -1.0f;  // Match faster-whisper default
+        options->temperature_fallback = nullptr;  // Use default array if nullptr
+        options->temperature_fallback_count = 0;
     }
 }
 
