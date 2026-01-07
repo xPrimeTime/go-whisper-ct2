@@ -1,0 +1,44 @@
+# Build directories
+csrc/build/
+bin/
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+go.work.sum
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Models (large files)
+models/
+*-ct2/
+*.bin
+*.safetensors
+
+# Test audio files
+*.wav
+*.mp3
+*.flac
+*.ogg
+testdata/
+
+# Compiled objects
+*.o
+*.a
+*.la
+*.lo
