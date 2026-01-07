@@ -16,7 +16,7 @@
 using namespace whisper_ct2;
 
 // Version info
-static const char* VERSION = "0.1.0";
+static const char* VERSION = "1.0.0";
 
 // Internal model wrapper
 struct whisper_model {
