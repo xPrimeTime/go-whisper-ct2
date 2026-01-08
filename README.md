@@ -496,6 +496,35 @@ done
 
 See [cmd/benchmark/README.md](cmd/benchmark/README.md) for complete documentation.
 
+### Comparing with faster-whisper
+
+Automated scripts are provided to benchmark go-whisper-ct2 against faster-whisper:
+
+```bash
+# Install faster-whisper
+pip install faster-whisper
+
+# Run automated comparison (builds both, runs benchmarks, compares results)
+./scripts/run-comparison.sh --model ./whisper-base-ct2 --iterations 10 audio.wav
+```
+
+This will run both implementations with identical settings and display a detailed comparison:
+
+```
+================================================================================
+PERFORMANCE COMPARISON: go-whisper-ct2 vs faster-whisper
+================================================================================
+
+Metric               Go              Python          Difference
+--------------------------------------------------------------------------------
+Mean Time            3.189           3.215           -0.8%
+Mean RTF             3.45            3.42            +0.9%
+
+✅ Performance is within 2% (-0.8%) - EXCELLENT!
+```
+
+See [scripts/README.md](scripts/README.md) and [BENCHMARKING.md](BENCHMARKING.md) for detailed comparison guides.
+
 ## Compute Types & Performance
 
 ### Understanding Compute Types

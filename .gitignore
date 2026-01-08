@@ -43,6 +43,10 @@ results.csv
 benchmark-*.json
 benchmark-*.csv
 
+# Benchmark documentation and scripts (work in progress)
+BENCHMARKING.md
+scripts/
+
 # Compiled objects
 *.o
 *.a
