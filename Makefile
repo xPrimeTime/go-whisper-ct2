@@ -1,7 +1,7 @@
 # go-whisper-ct2 Makefile
 # Build orchestration for C++ library and Go bindings
 
-.PHONY: all build build-cpp build-go build-cli clean test test-cpp test-go install-cpp help
+.PHONY: all build build-cpp build-go build-cli build-benchmark clean test test-cpp test-go install-cpp help
 
 # Configuration
 BUILD_DIR := csrc/build
@@ -46,8 +46,16 @@ build-cli: build-go $(BIN_DIR)
 	go build -o $(BIN_DIR)/whisper-ct2 ./cmd/whisper-ct2
 	@echo "==> CLI built: $(BIN_DIR)/whisper-ct2"
 
+# Build benchmark tool
+build-benchmark: build-go $(BIN_DIR)
+	@echo "==> Building benchmark tool..."
+	CGO_CFLAGS="-I$(PWD)/csrc/include" \
+	CGO_LDFLAGS="-L$(PWD)/$(BUILD_DIR) -lwhisper_ct2 -Wl,-rpath,$(PWD)/$(BUILD_DIR)" \
+	go build -o $(BIN_DIR)/whisper-benchmark ./cmd/benchmark
+	@echo "==> Benchmark tool built: $(BIN_DIR)/whisper-benchmark"
+
 # Build everything
-build: build-cli
+build: build-cli build-benchmark
 
 # Run C++ tests
 test-cpp: build-cpp
@@ -110,10 +118,11 @@ help:
 	@echo "go-whisper-ct2 build targets:"
 	@echo ""
 	@echo "  make              - Build everything (default)"
-	@echo "  make build        - Build C++ library, Go package, and CLI"
+	@echo "  make build        - Build C++ library, Go package, CLI, and benchmark tool"
 	@echo "  make build-cpp    - Build C++ library only"
 	@echo "  make build-go     - Build Go package only"
 	@echo "  make build-cli    - Build CLI application"
+	@echo "  make build-benchmark - Build benchmark tool"
 	@echo ""
 	@echo "  make test         - Run all tests"
 	@echo "  make test-cpp     - Run C++ tests"

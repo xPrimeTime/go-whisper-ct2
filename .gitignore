@@ -37,6 +37,12 @@ models/
 *.ogg
 testdata/
 
+# Benchmark results
+results.json
+results.csv
+benchmark-*.json
+benchmark-*.csv
+
 # Compiled objects
 *.o
 *.a

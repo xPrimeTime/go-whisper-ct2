@@ -42,6 +42,7 @@ git clone https://huggingface.co/Systran/faster-whisper-small whisper-small-ct2
 - [Model Setup](#model-setup)
 - [CLI Usage](#cli-usage)
 - [Go Library Usage](#go-library-usage)
+- [Benchmarking](#benchmarking)
 - [Compute Types & Performance](#compute-types--performance)
 - [Troubleshooting](#troubleshooting)
 - [Project Structure](#project-structure)
@@ -403,6 +404,97 @@ model, err := whisper.LoadModel("./model", config)
 samples := []float32{...} // Your audio data
 result, err := model.TranscribePCM(samples, whisper.WithLanguage("en"))
 ```
+
+## Benchmarking
+
+A dedicated benchmark tool is included for performance testing and comparing configurations.
+
+### Build the Benchmark Tool
+
+```bash
+make build-benchmark
+# Binary: bin/whisper-benchmark
+```
+
+### Basic Usage
+
+```bash
+# Benchmark with 3 iterations (default)
+./bin/whisper-benchmark --model ./whisper-base-ct2 audio.wav
+
+# Multiple iterations for better statistics
+./bin/whisper-benchmark --model ./whisper-base-ct2 --iterations 10 audio.wav
+
+# Benchmark multiple files
+./bin/whisper-benchmark --model ./whisper-base-ct2 audio1.wav audio2.wav audio3.mp3
+```
+
+### Export Results
+
+```bash
+# Save results to JSON and CSV
+./bin/whisper-benchmark \
+  --model ./whisper-base-ct2 \
+  --iterations 5 \
+  --output-json results.json \
+  --output-csv results.csv \
+  audio.wav
+```
+
+### Reported Metrics
+
+The benchmark tool provides comprehensive statistics:
+
+- **Transcription time**: min, max, mean, median, standard deviation
+- **Real-Time Factor (RTF)**: Automatic calculation (audio_duration / transcription_time)
+  - Higher RTF = faster (e.g., 3.5x means processing 3.5 seconds of audio per second)
+- **Language detection** results
+- **Segment and text** statistics
+
+### Example Output
+
+```
+Benchmarking: audio.wav
+================================================================================
+
+Audio: audio.wav
+  Duration:           4.82s
+  Iterations:         3
+
+Transcription Time:
+  Min:                1.234s
+  Max:                1.298s
+  Mean:               1.267s
+  Median:             1.271s
+  Std Dev:            0.027s
+
+Real-Time Factor:
+  Min RTF:            3.71x (fastest)
+  Max RTF:            3.91x (slowest)
+  Mean RTF:           3.81x
+  Median RTF:         3.79x
+
+Transcription Info:
+  Language:           en
+  Segments:           2
+  Text length:        142 chars
+================================================================================
+```
+
+### Comparison Benchmarks
+
+```bash
+# Compare different quantization levels
+./bin/whisper-benchmark --model ./whisper-base-ct2-int8 --compute-type int8 --output-json int8.json audio.wav
+./bin/whisper-benchmark --model ./whisper-base-ct2 --output-json default.json audio.wav
+
+# Compare beam sizes
+for beam in 1 5 10; do
+  ./bin/whisper-benchmark --model ./whisper-base-ct2 --beam-size $beam --output-json beam-$beam.json audio.wav
+done
+```
+
+See [cmd/benchmark/README.md](cmd/benchmark/README.md) for complete documentation.
 
 ## Compute Types & Performance
 
