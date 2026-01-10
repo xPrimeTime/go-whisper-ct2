@@ -2,12 +2,12 @@
 
 Go bindings to [CTranslate2](https://github.com/OpenNMT/CTranslate2) for high-quality Whisper speech-to-text inference — **without Python**.
 
-This library provides the same transcription quality as [faster-whisper](https://github.com/SYSTRAN/faster-whisper) with **performance within 1.25x** of the Python implementation. It uses the same CTranslate2 inference engine and model format, accessed directly from Go/C++ instead of Python.
+This library provides the same transcription quality as [faster-whisper](https://github.com/SYSTRAN/faster-whisper) with **performance 1.23x slower** than the Python implementation (with proper configuration). It uses the same CTranslate2 inference engine and model format, accessed directly from Go/C++ instead of Python.
 
 ## Features
 
 - High-quality Whisper transcription via CTranslate2
-- **Performance within 1.25x of faster-whisper** (same optimization features)
+- **Performance 1.23x slower than faster-whisper** (with OMP_NUM_THREADS configured)
 - No Python dependency — pure Go + C++ implementation
 - Support for all Whisper model sizes (tiny, base, small, medium, large-v3)
 - Multiple audio formats (WAV, MP3, FLAC, OGG, AIFF, AU)
@@ -215,11 +215,11 @@ huggingface-cli download Systran/faster-whisper-small --local-dir whisper-small-
 
 | Model | Size | Speed | Accuracy | HuggingFace URL |
 |-------|------|-------|----------|-----------------|
-| tiny | ~150 MB | Fastest | Lower | https://huggingface.co/Systran/faster-whisper-tiny |
-| base | ~300 MB | Fast | Good | https://huggingface.co/Systran/faster-whisper-base |
-| small | ~1 GB | Medium | Better | https://huggingface.co/Systran/faster-whisper-small |
-| medium | ~3 GB | Slow | High | https://huggingface.co/Systran/faster-whisper-medium |
-| large-v3 | ~6 GB | Slowest | Best | https://huggingface.co/Systran/faster-whisper-large-v3 |
+| tiny | ~75 MB | Fastest | Lower | https://huggingface.co/Systran/faster-whisper-tiny |
+| base | ~145 MB | Fast | Good | https://huggingface.co/Systran/faster-whisper-base |
+| small | ~486 MB | Medium | Better | https://huggingface.co/Systran/faster-whisper-small |
+| medium | ~1.5 GB | Slow | High | https://huggingface.co/Systran/faster-whisper-medium |
+| large-v3 | ~3.1 GB | Slowest | Best | https://huggingface.co/Systran/faster-whisper-large-v3 |
 
 **Note:** Pre-converted models use `float16` precision. On CPUs without float16 support (most CPUs), CTranslate2 will automatically convert to `float32` at runtime. You'll see a warning message, but this is normal and doesn't affect transcription quality.
 
@@ -520,10 +520,10 @@ PERFORMANCE COMPARISON: go-whisper-ct2 vs faster-whisper
 
 Metric               Go              Python          Difference
 --------------------------------------------------------------------------------
-Mean Time            3.189           3.215           -0.8%
-Mean RTF             3.45            3.42            +0.9%
+Mean Time            5.51s           4.47s           +23.3%
+Mean RTF             3.34x           4.11x           -18.8%
 
-✅ Performance is within 2% (-0.8%) - EXCELLENT!
+⚠️  Go is 1.23x slower than Python (requires OMP_NUM_THREADS configuration)
 ```
 
 See [scripts/README.md](scripts/README.md) and [BENCHMARKING.md](BENCHMARKING.md) for detailed comparison guides.
@@ -597,7 +597,7 @@ export OMP_NUM_THREADS=12
 - **Rule of thumb**: Use 75% of your total thread count
 
 **Key Takeaways:**
-- ✅ Performance within 1.25x of faster-whisper (with proper threading)
+- ✅ Performance 1.23x slower than faster-whisper (with proper threading)
 - ✅ Both use identical CTranslate2 inference engine
 - ✅ Both implement same optimizations (silent chunk filtering, context conditioning, etc.)
 - ✅ Go version has zero Python runtime overhead
