@@ -4,6 +4,7 @@
 #include <ctranslate2/models/whisper.h>
 #include <ctranslate2/storage_view.h>
 #include <ctranslate2/replica_pool.h>
+#include <ctranslate2/vocabulary.h>
 
 #include <memory>
 #include <vector>
@@ -11,6 +12,7 @@
 #include <cstring>
 #include <algorithm>
 #include <future>
+#include <fstream>
 #include <zlib.h>
 
 using namespace whisper_ct2;
@@ -22,8 +24,10 @@ static const char* VERSION = "1.1.0";
 // Internal model wrapper
 struct whisper_model {
     std::unique_ptr<ctranslate2::models::Whisper> model;
+    std::unique_ptr<ctranslate2::Vocabulary> vocabulary;
     bool is_multilingual;
     int n_mels;
+    size_t eot_token_id;  // End of text token ID for filtering
 };
 
 // Thread-local error state
@@ -48,6 +52,47 @@ static char* strdup_safe(const std::string& s) {
     if (result) {
         std::strcpy(result, s.c_str());
     }
+    return result;
+}
+
+// Helper: Decode token IDs to text (matching Python's tokenizer.decode())
+// Filters out tokens >= EOT, decodes using vocabulary, cleans BPE artifacts
+// OPTIMIZED: Use append() and in-place cleaning for better performance
+static std::string decode_tokens(
+    const std::vector<size_t>& token_ids,
+    const ctranslate2::Vocabulary& vocab,
+    size_t eot_token_id
+) {
+    std::string result;
+    result.reserve(token_ids.size() * 4);
+
+    // Decode tokens directly - use append() which is faster than operator+=
+    for (size_t token_id : token_ids) {
+        if (token_id >= eot_token_id) {
+            continue;
+        }
+        if (token_id < vocab.size()) {
+            const std::string& token = vocab.to_token(token_id);
+            result.append(token);
+        }
+    }
+
+    // Clean BPE artifacts in-place to avoid extra allocation
+    size_t write_pos = 0;
+    for (size_t read_pos = 0; read_pos < result.size(); ++read_pos, ++write_pos) {
+        if (read_pos + 1 < result.size() &&
+            static_cast<unsigned char>(result[read_pos]) == 0xC4 &&
+            static_cast<unsigned char>(result[read_pos + 1]) == 0xA0) {
+            result[write_pos] = ' ';
+            ++read_pos;
+        } else {
+            if (write_pos != read_pos) {
+                result[write_pos] = result[read_pos];
+            }
+        }
+    }
+    result.resize(write_pos);
+
     return result;
 }
 
@@ -158,9 +203,12 @@ static float calculate_avg_logprob(const std::vector<float>& scores) {
     return sum / scores.size();
 }
 
-// Helper: Extract text and timestamps from generation result
+// Helper: Extract text and timestamps from generation result (using token IDs)
+// This matches Python's faster-whisper approach exactly
 static void process_generation_result(
     const ctranslate2::models::WhisperGenerationResult& gen_result,
+    const ctranslate2::Vocabulary& vocab,
+    size_t eot_token_id,
     float time_offset,
     std::vector<whisper_segment_t>& segments,
     std::string& full_text,
@@ -168,16 +216,19 @@ static void process_generation_result(
     bool return_no_speech_prob
 ) {
     // Process sequences (only use the first/best sequence when num_hypotheses > 1)
-    for (size_t seq_idx = 0; seq_idx < gen_result.sequences.size() && seq_idx < 1; ++seq_idx) {
-        const auto& sequence = gen_result.sequences[seq_idx];
+    for (size_t seq_idx = 0; seq_idx < gen_result.sequences_ids.size() && seq_idx < 1; ++seq_idx) {
+        const auto& token_ids = gen_result.sequences_ids[seq_idx];
 
-        // Parse tokens to extract text and timestamps
-        std::string segment_text;
+        // Parse token IDs to extract text and timestamps
+        std::vector<size_t> text_tokens;
         float start_time = time_offset;
         float end_time = time_offset + 30.0f;  // Default to chunk end
         bool in_timestamp = false;
 
-        for (const auto& token : sequence) {
+        for (size_t token_id : token_ids) {
+            // Get the string representation for timestamp detection
+            const std::string& token = vocab.to_token(token_id);
+
             // Check for timestamp tokens: <|0.00|>, <|0.02|>, etc.
             if (token.size() > 4 && token[0] == '<' && token[1] == '|' &&
                 token[token.size()-2] == '|' && token[token.size()-1] == '>') {
@@ -195,36 +246,38 @@ static void process_generation_result(
                     // Not a timestamp, might be special token
                 }
             } else if (token[0] != '<') {
-                // Regular text token
-                segment_text += token;
+                // Regular text token - collect ID for decoding
+                text_tokens.push_back(token_id);
             }
         }
 
-        // Trim whitespace
-        while (!segment_text.empty() && std::isspace(segment_text.front())) {
-            segment_text.erase(0, 1);
-        }
-        while (!segment_text.empty() && std::isspace(segment_text.back())) {
-            segment_text.pop_back();
-        }
+        if (!text_tokens.empty()) {
+            // Decode tokens like Python does: filter EOT, decode, clean BPE
+            std::string segment_text = decode_tokens(text_tokens, vocab, eot_token_id);
 
-        if (!segment_text.empty()) {
-            // Clean BPE artifacts
-            segment_text = clean_text(segment_text);
-
-            whisper_segment_t seg;
-            seg.text = strdup_safe(segment_text);
-            seg.start_time = start_time;
-            seg.end_time = end_time;
-            seg.score = return_scores && seq_idx < gen_result.scores.size()
-                        ? gen_result.scores[seq_idx] : 0.0f;
-            seg.no_speech_prob = return_no_speech_prob ? gen_result.no_speech_prob : 0.0f;
-            segments.push_back(seg);
-
-            if (!full_text.empty()) {
-                full_text += " ";
+            // Trim whitespace
+            while (!segment_text.empty() && std::isspace(segment_text.front())) {
+                segment_text.erase(0, 1);
             }
-            full_text += segment_text;
+            while (!segment_text.empty() && std::isspace(segment_text.back())) {
+                segment_text.pop_back();
+            }
+
+            if (!segment_text.empty()) {
+                whisper_segment_t seg;
+                seg.text = strdup_safe(segment_text);
+                seg.start_time = start_time;
+                seg.end_time = end_time;
+                seg.score = return_scores && seq_idx < gen_result.scores.size()
+                            ? gen_result.scores[seq_idx] : 0.0f;
+                seg.no_speech_prob = return_no_speech_prob ? gen_result.no_speech_prob : 0.0f;
+                segments.push_back(seg);
+
+                if (!full_text.empty()) {
+                    full_text += " ";
+                }
+                full_text += segment_text;
+            }
         }
     }
 }
@@ -389,16 +442,12 @@ static whisper_error_t transcribe_samples(
                 if (result_futures.empty()) continue;
                 auto result = result_futures[0].get();
 
-                // Extract text to check quality
+                // Extract text to check quality (using token IDs like Python)
                 std::string chunk_text;
-                for (const auto& sequence : result.sequences) {
-                    for (const auto& token : sequence) {
-                        if (token[0] != '<') {
-                            chunk_text += token;
-                        }
-                    }
+                if (!result.sequences_ids.empty()) {
+                    const auto& token_ids = result.sequences_ids[0];
+                    chunk_text = decode_tokens(token_ids, *model->vocabulary, model->eot_token_id);
                 }
-                chunk_text = clean_text(chunk_text);
 
                 // Calculate quality metrics (like faster-whisper lines 1465-1469)
                 float compression_ratio = calculate_compression_ratio(chunk_text);
@@ -468,6 +517,8 @@ static whisper_error_t transcribe_samples(
                 size_t segments_before = all_segments.size();
                 process_generation_result(
                     best_result,
+                    *model->vocabulary,
+                    model->eot_token_id,
                     time_offset,
                     all_segments,
                     full_text,
@@ -616,6 +667,24 @@ whisper_error_t whisper_model_load(
 
         model->is_multilingual = model->model->is_multilingual();
         model->n_mels = model->model->n_mels();
+
+        // Load vocabulary from model directory (Python-free!)
+        std::string vocab_file_path = std::string(model_path) + "/vocabulary.txt";
+        std::ifstream vocab_file(vocab_file_path);
+        if (!vocab_file.is_open()) {
+            set_error(WHISPER_ERROR_MODEL_LOAD_FAILED,
+                     "Failed to load vocabulary file: " + vocab_file_path);
+            return WHISPER_ERROR_MODEL_LOAD_FAILED;
+        }
+
+        model->vocabulary = std::make_unique<ctranslate2::Vocabulary>(
+            ctranslate2::Vocabulary::from_text_file(vocab_file)
+        );
+        vocab_file.close();
+
+        // Store EOT token ID for filtering (matching Python's approach)
+        // Whisper uses token 50257 as EOT (<|endoftext|>)
+        model->eot_token_id = 50257;
 
         *out_model = model.release();
         return WHISPER_OK;
