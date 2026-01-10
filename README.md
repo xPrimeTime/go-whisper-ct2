@@ -2,12 +2,12 @@
 
 Go bindings to [CTranslate2](https://github.com/OpenNMT/CTranslate2) for high-quality Whisper speech-to-text inference — **without Python**.
 
-This library provides the same transcription quality as [faster-whisper](https://github.com/SYSTRAN/faster-whisper) with **performance within 2%** of the Python implementation. It uses the same CTranslate2 inference engine and model format, accessed directly from Go/C++ instead of Python.
+This library provides the same transcription quality as [faster-whisper](https://github.com/SYSTRAN/faster-whisper) with **performance within 1.25x** of the Python implementation. It uses the same CTranslate2 inference engine and model format, accessed directly from Go/C++ instead of Python.
 
 ## Features
 
 - High-quality Whisper transcription via CTranslate2
-- **Performance within 2% of faster-whisper** (same optimization features)
+- **Performance within 1.25x of faster-whisper** (same optimization features)
 - No Python dependency — pure Go + C++ implementation
 - Support for all Whisper model sizes (tiny, base, small, medium, large-v3)
 - Multiple audio formats (WAV, MP3, FLAC, OGG, AIFF, AU)
@@ -29,7 +29,10 @@ make
 # 2. Download a model (using git, no Python needed)
 git clone https://huggingface.co/Systran/faster-whisper-small whisper-small-ct2
 
-# 3. Transcribe audio
+# 3. Set optimal threading for best performance
+export OMP_NUM_THREADS=12  # Adjust for your CPU (see Performance section)
+
+# 4. Transcribe audio
 ./bin/whisper-ct2 -model ./whisper-small-ct2 audio.wav
 ```
 
@@ -564,23 +567,44 @@ automatically converted to use the float32 compute type instead.
 Real-world performance comparison with faster-whisper (Python):
 
 **Test Setup:**
-- Model: whisper-small (float16)
-- Hardware: CPU (Intel/AMD x86_64)
-- Audio: ~5 seconds, typical speech
+- Model: whisper-small (float16 → auto-converted to float32)
+- Hardware: AMD Ryzen 7 5800X3D (8 cores, 16 threads)
+- Audio: harvard.wav, 18.4 seconds
 
 **Results:**
 
-| Implementation | Transcription Time | Real-Time Factor | Performance |
-|----------------|-------------------|------------------|-------------|
-| faster-whisper (Python) | 1.37s | 3.50x | Baseline |
-| go-whisper-ct2 (Go) | 1.57s | 3.44x | **Within 2%** |
+| Implementation | Time | Real-Time Factor | vs Python |
+|----------------|------|------------------|-----------|
+| faster-whisper (Python, default) | 4.47s | 4.11x | Baseline |
+| go-whisper-ct2 (with OMP_NUM_THREADS=12) | 5.51s | 3.34x | **1.23x slower** |
+| go-whisper-ct2 (without OMP config) | 10.5s | 1.75x | 2.35x slower |
+
+**⚠️ IMPORTANT:** Setting `OMP_NUM_THREADS` is critical for performance!
+
+```bash
+# Without OMP_NUM_THREADS: ~10s (2.3x slower than Python)
+./bin/whisper-ct2 -model ./whisper-small-ct2 audio.wav
+
+# With optimal OMP_NUM_THREADS: ~5.5s (1.23x slower than Python)
+export OMP_NUM_THREADS=12
+./bin/whisper-ct2 -model ./whisper-small-ct2 audio.wav
+```
+
+**Optimal OMP_NUM_THREADS by CPU:**
+- 16-thread CPU (8 cores): `OMP_NUM_THREADS=12`
+- 8-thread CPU (4 cores): `OMP_NUM_THREADS=6`
+- 4-thread CPU (2 cores): `OMP_NUM_THREADS=3`
+- **Rule of thumb**: Use 75% of your total thread count
 
 **Key Takeaways:**
-- ✅ Performance within 2% of faster-whisper
+- ✅ Performance within 1.25x of faster-whisper (with proper threading)
 - ✅ Both use identical CTranslate2 inference engine
 - ✅ Both implement same optimizations (silent chunk filtering, context conditioning, etc.)
 - ✅ Go version has zero Python runtime overhead
 - ✅ Single binary deployment vs Python environment
+- ⚠️ Must set `OMP_NUM_THREADS` for optimal performance
+
+See [PERFORMANCE.md](PERFORMANCE.md) for detailed analysis and optimization guide.
 
 **Optimization Features (Enabled by Default):**
 1. **Silent chunk filtering** - Automatically skips silent audio (2-3x faster on typical audio)
@@ -674,11 +698,39 @@ whisper: failed to load audio: ...
 
 ### Slow transcription
 
-**Tips:**
-1. Use `int8` compute type: `-compute-type int8`
-2. Use smaller model (tiny or base for real-time)
-3. Specify language instead of auto-detect: `-language en`
-4. Reduce beam size: `-beam-size 1`
+**First: Check if OMP_NUM_THREADS is set!** This is the #1 cause of slow performance.
+
+```bash
+# Set optimal threading (critical for performance!)
+export OMP_NUM_THREADS=12  # Adjust for your CPU
+
+# Verify it's set
+echo $OMP_NUM_THREADS
+
+# Now transcribe
+./bin/whisper-ct2 -model ./whisper-small-ct2 audio.wav
+```
+
+**Additional optimization tips:**
+1. **Set OMP_NUM_THREADS** to ~75% of your CPU thread count (most important!)
+2. Use `int8_float32` compute type (if supported): `-compute-type int8_float32`
+3. Use smaller model (tiny or base for real-time)
+4. Specify language instead of auto-detect: `-language en`
+5. Reduce beam size: `-beam-size 1`
+
+**Performance troubleshooting:**
+```bash
+# Check current performance
+time OMP_NUM_THREADS=12 ./bin/whisper-ct2 -model ./model audio.wav
+
+# Compare with different thread counts
+for threads in 4 8 12 16; do
+  echo "Testing OMP_NUM_THREADS=$threads"
+  OMP_NUM_THREADS=$threads time ./bin/whisper-ct2 -model ./model audio.wav
+done
+```
+
+See [PERFORMANCE.md](PERFORMANCE.md) for detailed optimization guide.
 
 ## Project Structure
 
@@ -729,17 +781,19 @@ The mel spectrogram computation matches OpenAI's original implementation and fas
 | Runtime dependency | Python + packages | None (single binary) |
 | Model format | CTranslate2 | CTranslate2 (same) |
 | Transcription quality | Reference | Identical |
-| Performance | Baseline | Within 2% |
+| Performance | Baseline | 1.23x slower |
+| Performance (if OMP not set) | Baseline | 2.3x slower ⚠️ |
 | Silent chunk filtering | ✓ | ✓ |
 | Context conditioning | ✓ | ✓ |
 | Compression ratio checks | ✓ | ✓ |
 | Log probability thresholds | ✓ | ✓ |
 | Temperature fallback | ✓ | ✓ |
+| INT8 quantization | ✓ | Limited (backend dependent) |
 | Word-level timestamps | ✓ | Planned |
 | Silero VAD preprocessing | ✓ | Not implemented |
 | Streaming transcription | ✓ | File-based only |
 
-**Summary:** Core optimization features are fully implemented with near-identical performance. The Go implementation offers easier deployment (single binary, no Python) while maintaining the same transcription quality and speed.
+**Summary:** Core optimization features are fully implemented with excellent performance (1.23x of Python). The Go implementation offers easier deployment (single binary, no Python) while maintaining the same transcription quality. **Remember to set `OMP_NUM_THREADS` for optimal performance!**
 
 ## Contributing
 

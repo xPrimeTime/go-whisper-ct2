@@ -1,5 +1,6 @@
 # Build directories
 csrc/build/
+csrc/.cache/
 bin/
 
 # Go
@@ -42,10 +43,13 @@ results.json
 results.csv
 benchmark-*.json
 benchmark-*.csv
+go-benchmark.json
+python-benchmark.json
 
-# Benchmark documentation and scripts (work in progress)
-BENCHMARKING.md
-scripts/
+# Temporary test/investigation scripts
+check_*.py
+test_*.py
+profile_*.py
 
 # Compiled objects
 *.o

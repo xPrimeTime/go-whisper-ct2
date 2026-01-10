@@ -51,7 +51,7 @@ void whisper_clear_error(void);
 
 typedef struct {
     const char* device;           /* "cpu" only for now */
-    const char* compute_type;     /* "int8", "int16", "float16", "float32", "default" */
+    const char* compute_type;     /* "int8", "int8_float32", "int8_float16", "int8_bfloat16", "int16", "float16", "bfloat16", "float32", "default" */
     int32_t inter_threads;        /* Threads for batch parallelization (default: 1) */
     int32_t intra_threads;        /* Threads within operations (default: 0 = auto) */
 } whisper_model_config_t;
@@ -92,6 +92,7 @@ int32_t whisper_model_n_mels(whisper_model_t model);
 typedef struct {
     /* Decoding parameters */
     int32_t beam_size;              /* Beam search width (default: 5) */
+    int32_t best_of;                /* Number of candidates to generate (default: 5, same as faster-whisper) */
     float patience;                 /* Beam search patience factor (default: 1.0) */
     float length_penalty;           /* Length penalty (default: 1.0) */
     float repetition_penalty;       /* Repetition penalty (default: 1.0) */

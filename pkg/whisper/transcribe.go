@@ -169,6 +169,7 @@ func toCOptions(opts *TranscribeOptions) C.whisper_transcribe_options_t {
 	C.whisper_transcribe_options_init(&cOpts)
 
 	cOpts.beam_size = C.int32_t(opts.BeamSize)
+	cOpts.best_of = C.int32_t(opts.BestOf)
 	cOpts.patience = C.float(opts.Patience)
 	cOpts.length_penalty = C.float(opts.LengthPenalty)
 	cOpts.repetition_penalty = C.float(opts.RepetitionPenalty)

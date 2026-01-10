@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(whisper_ct2 VERSION 0.1.0 LANGUAGES CXX)
+project(whisper_ct2 VERSION 1.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -12,6 +12,9 @@ option(WITH_TESTS "Build tests" OFF)
 
 # Find CTranslate2 (package name is lowercase)
 find_package(ctranslate2 REQUIRED)
+
+# Find OpenMP for parallelization
+find_package(OpenMP)
 
 # Find audio libraries via pkg-config
 find_package(PkgConfig REQUIRED)
@@ -48,7 +51,13 @@ target_link_libraries(whisper_ct2
         pocketfft
         PkgConfig::SNDFILE
         PkgConfig::SAMPLERATE
+        z
 )
+
+# Link OpenMP if available
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(whisper_ct2 PRIVATE OpenMP::OpenMP_CXX)
+endif()
 
 target_compile_options(whisper_ct2 PRIVATE
     -Wall -Wextra -Wpedantic

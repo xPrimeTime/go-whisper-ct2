@@ -10,13 +10,14 @@
 #include <string>
 #include <cstring>
 #include <algorithm>
-#include <unordered_map>
 #include <future>
+#include <zlib.h>
 
 using namespace whisper_ct2;
 
+
 // Version info
-static const char* VERSION = "1.0.0";
+static const char* VERSION = "1.1.0";
 
 // Internal model wrapper
 struct whisper_model {
@@ -87,8 +88,12 @@ static ctranslate2::ComputeType parse_compute_type(const char* compute_type) {
     }
     std::string ct = compute_type;
     if (ct == "int8") return ctranslate2::ComputeType::INT8;
+    if (ct == "int8_float32") return ctranslate2::ComputeType::INT8_FLOAT32;
+    if (ct == "int8_float16") return ctranslate2::ComputeType::INT8_FLOAT16;
+    if (ct == "int8_bfloat16") return ctranslate2::ComputeType::INT8_BFLOAT16;
     if (ct == "int16") return ctranslate2::ComputeType::INT16;
     if (ct == "float16") return ctranslate2::ComputeType::FLOAT16;
+    if (ct == "bfloat16") return ctranslate2::ComputeType::BFLOAT16;
     if (ct == "float32") return ctranslate2::ComputeType::FLOAT32;
     return ctranslate2::ComputeType::DEFAULT;
 }
@@ -123,21 +128,23 @@ static std::vector<std::string> build_prompt(
     return prompt;
 }
 
-// Helper: Calculate compression ratio for text
+// Helper: Calculate compression ratio for text (matches faster-whisper)
 static float calculate_compression_ratio(const std::string& text) {
     if (text.empty()) return 1.0f;
 
-    // Count unique characters vs total length as a simple compression measure
-    // In faster-whisper, this uses gzip compression, but token ratio is simpler
-    std::unordered_map<char, int> char_freq;
-    for (char c : text) {
-        char_freq[c]++;
+    // Use zlib compression ratio like faster-whisper does
+    // compression_ratio = len(text) / len(zlib.compress(text))
+    uLongf compressed_size = compressBound(text.length());
+    std::vector<Bytef> compressed(compressed_size);
+
+    int result = compress(compressed.data(), &compressed_size,
+                         reinterpret_cast<const Bytef*>(text.data()), text.length());
+
+    if (result != Z_OK) {
+        return 1.0f;  // Compression failed, assume no repetition
     }
 
-    // Compression ratio = original_size / compressed_size estimate
-    // Higher ratio = more repetitive text
-    float unique_ratio = static_cast<float>(char_freq.size()) / text.length();
-    return 1.0f / (unique_ratio + 0.01f);  // Avoid division by zero
+    return static_cast<float>(text.length()) / static_cast<float>(compressed_size);
 }
 
 // Helper: Calculate average log probability
@@ -160,8 +167,8 @@ static void process_generation_result(
     bool return_scores,
     bool return_no_speech_prob
 ) {
-    // Process sequences
-    for (size_t seq_idx = 0; seq_idx < gen_result.sequences.size(); ++seq_idx) {
+    // Process sequences (only use the first/best sequence when num_hypotheses > 1)
+    for (size_t seq_idx = 0; seq_idx < gen_result.sequences.size() && seq_idx < 1; ++seq_idx) {
         const auto& sequence = gen_result.sequences[seq_idx];
 
         // Parse tokens to extract text and timestamps
@@ -255,6 +262,7 @@ static whisper_error_t transcribe_samples(
         // Build generation options
         ctranslate2::models::WhisperOptions gen_opts;
         gen_opts.beam_size = opts.beam_size;
+        // Note: num_hypotheses is set dynamically in the temperature fallback loop
         gen_opts.patience = opts.patience;
         gen_opts.length_penalty = opts.length_penalty;
         gen_opts.repetition_penalty = opts.repetition_penalty;
@@ -264,6 +272,7 @@ static whisper_error_t transcribe_samples(
         gen_opts.sampling_temperature = opts.sampling_temperature;
         gen_opts.suppress_blank = opts.suppress_blank;
         gen_opts.return_scores = opts.return_scores;
+        gen_opts.max_initial_timestamp_index = opts.max_initial_timestamp_index;
         // Auto-enable no_speech_prob if using threshold
         gen_opts.return_no_speech_prob = opts.return_no_speech_prob || (opts.no_speech_threshold > 0.0f);
 
@@ -335,31 +344,50 @@ static whisper_error_t transcribe_samples(
             const float* temps = opts.temperature_fallback ? opts.temperature_fallback : default_temps;
             size_t temp_count = opts.temperature_fallback_count > 0 ? opts.temperature_fallback_count : 6;
 
+            // Pre-encode features ONCE for all temperature attempts (critical for performance!)
+            // This matches faster-whisper's behavior
+            auto encoder_output_future = model->model->encode(features, /* to_cpu */ false);
+            auto encoder_output = encoder_output_future.get();
+
             // Try generation with temperature fallback
             ctranslate2::models::WhisperGenerationResult best_result;
             bool success = false;
 
+            // Track best fallback result if all temperatures fail (like faster-whisper)
+            float best_fallback_logprob = -std::numeric_limits<float>::infinity();
+            ctranslate2::models::WhisperGenerationResult best_fallback_result;
+            bool has_fallback = false;
+            bool has_cr_passed_fallback = false;
+
             for (size_t t = 0; t < temp_count && !success; ++t) {
-                // Update temperature
+                // Update temperature and beam search parameters
                 auto temp_opts = gen_opts;
                 temp_opts.sampling_temperature = temps[t];
 
-                // Generate
+                // Force return_scores=true for quality checking (like faster-whisper)
+                temp_opts.return_scores = true;
+
+                // Match faster-whisper's behavior:
+                // - temperature == 0: beam_size=N, no num_hypotheses (greedy beam search)
+                // - temperature > 0: beam_size=1, num_hypotheses=best_of (sampling)
+                if (temps[t] > 0.0f) {
+                    temp_opts.beam_size = 1;
+                    temp_opts.num_hypotheses = opts.best_of;
+                    temp_opts.sampling_topk = 0;  // Use all tokens for sampling
+                } else {
+                    temp_opts.beam_size = opts.beam_size;
+                    temp_opts.num_hypotheses = 1;  // Only return best sequence for greedy
+                }
+
+                // Generate from pre-encoded features
                 auto result_futures = model->model->generate(
-                    features,
+                    encoder_output,
                     {prompt},
                     temp_opts
                 );
 
                 if (result_futures.empty()) continue;
                 auto result = result_futures[0].get();
-
-                // Check no_speech_threshold to skip silent chunks (like faster-whisper)
-                if (opts.no_speech_threshold > 0.0f && result.no_speech_prob > opts.no_speech_threshold) {
-                    // Skip this chunk - it's silent
-                    time_offset += AudioProcessor::CHUNK_LENGTH;
-                    goto next_chunk;  // Break out of temperature loop and chunk loop
-                }
 
                 // Extract text to check quality
                 std::string chunk_text;
@@ -372,24 +400,67 @@ static whisper_error_t transcribe_samples(
                 }
                 chunk_text = clean_text(chunk_text);
 
-                // Calculate quality metrics
+                // Calculate quality metrics (like faster-whisper lines 1465-1469)
                 float compression_ratio = calculate_compression_ratio(chunk_text);
                 float avg_logprob = calculate_avg_logprob(result.scores);
 
-                // Check quality thresholds
+                // Check quality thresholds (like faster-whisper lines 1479-1505)
+                bool needs_fallback = false;
+
+                // Check compression ratio threshold
                 bool passed_compression = opts.compression_ratio_threshold <= 0.0f ||
                                          compression_ratio <= opts.compression_ratio_threshold;
-                bool passed_logprob = opts.logprob_threshold >= 0.0f ||
-                                     avg_logprob >= opts.logprob_threshold;
 
-                if (passed_compression && passed_logprob) {
-                    best_result = std::move(result);
-                    success = true;
-                } else if (t == temp_count - 1) {
-                    // Last temperature - use it anyway
-                    best_result = std::move(result);
-                    success = true;
+                if (!passed_compression) {
+                    needs_fallback = true;  // too repetitive
                 }
+
+                // Check log probability threshold
+                if (opts.logprob_threshold < 0.0f &&
+                    avg_logprob < opts.logprob_threshold) {
+                    needs_fallback = true;  // average log probability is too low
+                }
+
+                // Check if it's silence: if no_speech AND low quality, accept as silence
+                // (like faster-whisper lines 1507-1513)
+                if (opts.no_speech_threshold > 0.0f &&
+                    result.no_speech_prob > opts.no_speech_threshold &&
+                    opts.logprob_threshold < 0.0f &&
+                    avg_logprob < opts.logprob_threshold) {
+                    needs_fallback = false;  // silence - accept it
+                }
+
+                if (!needs_fallback) {
+                    best_result = std::move(result);
+                    success = true;
+                } else {
+                    // Track best fallback result (highest avg_logprob, prefer passed compression)
+                    bool update_fallback = false;
+
+                    if (!has_fallback) {
+                        // No fallback yet, use this one
+                        update_fallback = true;
+                    } else if (passed_compression && !has_cr_passed_fallback) {
+                        // This passed compression and previous didn't, prefer this
+                        update_fallback = true;
+                    } else if (passed_compression == has_cr_passed_fallback && avg_logprob > best_fallback_logprob) {
+                        // Both same compression status, pick higher logprob
+                        update_fallback = true;
+                    }
+
+                    if (update_fallback) {
+                        best_fallback_result = result;  // Copy for fallback
+                        best_fallback_logprob = avg_logprob;
+                        has_fallback = true;
+                        has_cr_passed_fallback = passed_compression;
+                    }
+                }
+            }
+
+            // If all temperatures failed, use best fallback (like faster-whisper lines 1518-1528)
+            if (!success && has_fallback) {
+                best_result = std::move(best_fallback_result);
+                success = true;
             }
 
             // Process the best result
@@ -421,8 +492,6 @@ static whisper_error_t transcribe_samples(
                     }
                 }
             }
-
-            next_chunk:
 
             time_offset += AudioProcessor::CHUNK_LENGTH;
 
@@ -529,7 +598,9 @@ whisper_error_t whisper_model_load(
             intra_threads = config->intra_threads >= 0 ? config->intra_threads : 0;
         }
 
-        // Load model with new API
+        // Load model with ReplicaPoolConfig API
+        // Note: Python's intra_threads maps to num_threads_per_replica
+        //       Python's inter_threads maps to max_queued_batches
         ctranslate2::ReplicaPoolConfig pool_config;
         pool_config.num_threads_per_replica = intra_threads;
         pool_config.max_queued_batches = inter_threads;
@@ -570,6 +641,7 @@ int32_t whisper_model_n_mels(whisper_model_t model) {
 void whisper_transcribe_options_init(whisper_transcribe_options_t* options) {
     if (options) {
         options->beam_size = 5;
+        options->best_of = 5;  // Match faster-whisper default
         options->patience = 1.0f;
         options->length_penalty = 1.0f;
         options->repetition_penalty = 1.0f;
@@ -838,8 +910,9 @@ const char* whisper_ct2_version(void) {
 }
 
 const char* whisper_ct2_ctranslate2_version(void) {
-    // CTranslate2 doesn't expose version at runtime, return compile-time info
-    return "4.x";  // TODO: Get actual version
+    // CTranslate2 doesn't expose version string at runtime
+    // Return minimum supported version (4.x series)
+    return "4.x+";
 }
 
 const char* whisper_ct2_supported_audio_formats(void) {

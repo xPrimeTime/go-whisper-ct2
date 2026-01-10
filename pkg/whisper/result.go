@@ -1,6 +1,7 @@
 package whisper
 
 import (
+	"strconv"
 	"strings"
 	"time"
 )
@@ -78,7 +79,7 @@ func (r *Result) VTT() string {
 // formatSRTEntry formats a single SRT entry.
 func formatSRTEntry(index int, start, end time.Duration, text string) string {
 	var sb strings.Builder
-	sb.WriteString(formatInt(index))
+	sb.WriteString(strconv.Itoa(index))
 	sb.WriteString("\n")
 	sb.WriteString(formatSRTTime(start))
 	sb.WriteString(" --> ")
@@ -137,25 +138,9 @@ func formatTimeComponents(h, m, s, ms int, sep string) string {
 
 // formatPadded formats an integer with zero padding.
 func formatPadded(n, width int) string {
-	s := formatInt(n)
+	s := strconv.Itoa(n)
 	for len(s) < width {
 		s = "0" + s
 	}
 	return s
-}
-
-// formatInt converts an integer to a string without importing strconv.
-func formatInt(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	if n < 0 {
-		return "-" + formatInt(-n)
-	}
-	var digits []byte
-	for n > 0 {
-		digits = append([]byte{byte('0' + n%10)}, digits...)
-		n /= 10
-	}
-	return string(digits)
 }

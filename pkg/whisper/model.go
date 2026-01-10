@@ -93,13 +93,12 @@ func LoadModel(path string, config ModelConfig) (*Model, error) {
 //
 // It's safe to call Close multiple times. After Close is called,
 // the model should not be used for transcription.
-func (m *Model) Close() error {
+func (m *Model) Close() {
 	if m.handle != nil {
 		C.whisper_model_free(m.handle)
 		m.handle = nil
 	}
 	runtime.SetFinalizer(m, nil)
-	return nil
 }
 
 // IsMultilingual returns true if the model supports multiple languages.

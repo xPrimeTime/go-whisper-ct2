@@ -7,6 +7,11 @@ type TranscribeOptions struct {
 	// Default: 5
 	BeamSize int
 
+	// BestOf is the number of candidate sequences to generate.
+	// This is critical for beam search performance (maps to num_hypotheses in CTranslate2).
+	// Default: 5 (same as faster-whisper)
+	BestOf int
+
 	// Patience is the beam search patience factor.
 	// Default: 1.0
 	Patience float32
@@ -105,6 +110,7 @@ type TranscribeOptions struct {
 func DefaultTranscribeOptions() TranscribeOptions {
 	return TranscribeOptions{
 		BeamSize:                 5,
+		BestOf:                   5,  // Match faster-whisper default
 		Patience:                 1.0,
 		LengthPenalty:            1.0,
 		RepetitionPenalty:        1.0,
@@ -159,6 +165,16 @@ func WithTask(task string) Option {
 func WithBeamSize(size int) Option {
 	return func(o *TranscribeOptions) {
 		o.BeamSize = size
+	}
+}
+
+// WithBestOf sets the number of candidate sequences to generate.
+//
+// This is critical for beam search performance. Should typically match BeamSize.
+// Default: 5 (same as faster-whisper)
+func WithBestOf(count int) Option {
+	return func(o *TranscribeOptions) {
+		o.BestOf = count
 	}
 }
 
